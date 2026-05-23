@@ -15,7 +15,7 @@ const MOVE_DEFS = [];
 });
 
 let solvedLookup; // Int8Array(27): posIdx → expected colorIdx, -1 = unused
-const moveStack = new Int8Array(12);
+const moveStack = new Int8Array(16); // enough for depth 10 + margin
 let solutionDepth = 0;
 
 function posIdx(x, y, z) { return (x + 1) * 9 + (y + 1) * 3 + (z + 1); }
@@ -57,13 +57,31 @@ function isGoal(s) {
   return true;
 }
 
+// Admissible heuristic: each face turn fixes at most 4 corners and 4 edges,
+// so we need at least ⌈wrong_corners/4⌉ and ⌈wrong_edges/4⌉ more moves.
+// Centers (nz=1) never move, so we skip them.
+function heuristic(s) {
+  let wc = 0, we = 0;
+  for (let i = 0; i < 26; i++) {
+    const b  = i << 2;
+    const x  = s[b], y = s[b + 1], z = s[b + 2];
+    const pi = posIdx(x, y, z);
+    if (solvedLookup[pi] === s[b + 3]) continue; // correctly placed
+    const nz = (x !== 0) + (y !== 0) + (z !== 0);
+    if      (nz === 3) wc++;
+    else if (nz === 2) we++;
+  }
+  return Math.max((wc + 3) >> 2, (we + 3) >> 2); // ceil(wc/4), ceil(we/4)
+}
+
 function dfs(s, remaining, lastFi, depth) {
   if (isGoal(s)) { solutionDepth = depth; return true; }
   if (remaining === 0) return false;
+  if (heuristic(s) > remaining) return false; // prune: unreachable in budget
   for (let mi = 0; mi < MOVE_DEFS.length; mi++) {
     const { face, inv, double, fi } = MOVE_DEFS[mi];
-    if (fi === lastFi) continue;                              // same face
-    if (OPPOSITE[fi] === lastFi && fi > lastFi) continue;    // commuting opposite
+    if (fi === lastFi) continue;                           // same face
+    if (OPPOSITE[fi] === lastFi && fi > lastFi) continue; // commuting opposite
     const next = new Int8Array(s);
     applyMove(next, face, inv, double);
     moveStack[depth] = mi;
@@ -74,7 +92,7 @@ function dfs(s, remaining, lastFi, depth) {
 
 function solve(startState) {
   if (isGoal(startState)) return [];
-  for (let maxDepth = 1; maxDepth <= 7; maxDepth++) {
+  for (let maxDepth = 1; maxDepth <= 10; maxDepth++) {
     if (dfs(new Int8Array(startState), maxDepth, -1, 0)) {
       return Array.from({ length: solutionDepth }, (_, i) => MOVE_DEFS[moveStack[i]].label);
     }

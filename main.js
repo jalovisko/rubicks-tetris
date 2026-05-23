@@ -322,7 +322,7 @@ function doSolve() {
     activeWorker = null;
     setSolving(false);
     if (moves === null) {
-      alert('No solution found within 7 moves.\nTip: use the Scramble button (6 moves) and then Solve.');
+      alert('No solution found within 10 moves.\nThe state may have been entered incorrectly, or requires a deeper search.');
       return;
     }
     solution     = moves;
@@ -382,14 +382,14 @@ function stepSolution(dir) {
       setAnimating(false);
     });
   } else {
-    // Rewind is instant — rebuild from snapshot, replay up to target
-    spawnMeshes(preSnapshot);
-    for (let i = 0; i < target; i++) {
-      const { face, inv, double } = parseLabel(solution[i]);
-      applyMoveToScene(face, inv, double);
-    }
-    solutionStep = target;
-    updateCounter();
+    // Animate the inverse of the last applied move
+    const { face, inv, double } = parseLabel(solution[solutionStep - 1]);
+    setAnimating(true);
+    startMoveAnimation(face, double ? inv : !inv, double, 280, () => {
+      solutionStep--;
+      updateCounter();
+      setAnimating(false);
+    });
   }
 }
 
