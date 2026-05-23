@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rubik's Tetris Solver</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h1>Rubik's<br/><span>Tetris</span></h1>
+      <p class="subtitle">Cube Solver</p>
+
+      <section class="panel">
+        <h2>Current State</h2>
+        <p class="hint">Click a cubie to set its color.</p>
+        <div id="color-picker">
+          <button class="swatch active" data-color="white"   style="background:#ffffff"></button>
+          <button class="swatch"        data-color="purple"  style="background:#7b2fbe"></button>
+          <button class="swatch"        data-color="green"   style="background:#2ecc71"></button>
+          <button class="swatch"        data-color="red"     style="background:#e74c3c"></button>
+          <button class="swatch"        data-color="orange"  style="background:#e67e22"></button>
+          <button class="swatch"        data-color="yellow"  style="background:#f1c40f"></button>
+          <button class="swatch"        data-color="blue"    style="background:#2980b9"></button>
+          <button class="swatch"        data-color="black"   style="background:#1a1a1a"></button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Actions</h2>
+        <button id="btn-solve" class="btn primary">Solve</button>
+        <button id="btn-reset" class="btn">Reset to Solved</button>
+        <button id="btn-scramble" class="btn">Scramble</button>
+      </section>
+
+      <section class="panel" id="solution-panel" hidden>
+        <h2>Solution</h2>
+        <div id="solution-moves"></div>
+        <div id="solution-nav">
+          <button id="btn-prev" class="btn">‹ Prev</button>
+          <span id="step-counter">0 / 0</span>
+          <button id="btn-next" class="btn">Next ›</button>
+        </div>
+      </section>
+    </aside>
+
+    <main id="viewport"></main>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

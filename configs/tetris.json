@@ -1,0 +1,19 @@
+ {
+"centers": {
+    "U": "purple",
+    "D": "black",
+    "F": "green",
+    "B": "red",
+    "L": "orange",
+    "R": "yellow"
+},
+"edges": {
+    "UF": "white",  "UR": "purple", "UB": "red",    "UL": "orange",
+    "FR": "yellow", "FL": "green",  "BR": "red",    "BL": "blue",
+    "DF": "green",  "DR": "yellow", "DB": "blue",   "DL": "orange"
+},
+"corners": {
+    "UFR": "purple",    "UFL": "green",     "UBR": "purple",    "UBL": "blue",
+    "DFR": "yellow",    "DFL": "orange",    "DBR": "red",       "DBL": "blue"
+}
+}
