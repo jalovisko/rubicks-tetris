@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 
 const COLOR_HEX = {
   white:  0xffffff,
@@ -16,16 +16,11 @@ const COLOR_HEX = {
 const INNER      = 0x1c1c1c;
 const GAP        = 0.045;
 const ALL_FACES  = ['U', 'D', 'F', 'B', 'L', 'R'];
-// Stable index list — must match what solver.worker.js expects
+// Stable index list, must match what solver.worker.js expects
 const COLOR_NAMES = ['white', 'purple', 'green', 'red', 'orange', 'yellow', 'blue', 'black'];
 function colorIdx(name) { const i = COLOR_NAMES.indexOf(name); return i < 0 ? 7 : i; }
 
-// Three.js BoxGeometry material order: +X, -X, +Y, -Y, +Z, -Z  →  R, L, U, D, F, B
-function outerFlags(x, y, z) {
-  return [x === 1, x === -1, y === 1, y === -1, z === 1, z === -1];
-}
-
-// Position → piece key  (order: U/D first, then F/B, then R/L — matches config)
+// Position → piece key  (order: U/D first, then F/B, then R/L. Matches config)
 function posKey(x, y, z) {
   const parts = [];
   if (y ===  1) parts.push('U');
@@ -40,7 +35,7 @@ function posKey(x, y, z) {
 function faceAxis(f)  { return { U:'y', D:'y', F:'z', B:'z', L:'x', R:'x' }[f]; }
 function faceLayer(f) { return { U:1,  D:-1,  F:1,  B:-1,  L:-1,  R:1  }[f]; }
 
-// ── Cubie state (plain objects, no Three.js) ──────────────────────────────────
+// -- Cubie state (plain objects, no Three.js) ----------------------------------
 
 function buildCubies(config) {
   const list = [];
@@ -73,7 +68,90 @@ function cubiesToBuffer(cubies) {
   return buf;
 }
 
-// ── Three.js scene ────────────────────────────────────────────────────────────
+// -- Animation state -----------------------------------------------------------
+
+let anim        = null;  // { pivot, axis, targetAngle, startTime, duration, onComplete }
+let isAnimating = false;
+
+function easeInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t; }
+
+// Pivot-group animation: parent the slice to a group, rotate the group,
+// then un-parent. This makes every cubie spin correctly around the face axis.
+function startMoveAnimation(face, inv, double, duration, onComplete) {
+  const axis    = faceAxis(face);
+  const layer   = faceLayer(face);
+  const affected = meshCubies.filter(mc => mc[axis] === layer);
+
+  clearSelection(); // avoid stale selection box during animation
+
+  const pivot = new THREE.Group(); // at world origin — same as cube centre
+  scene.add(pivot);
+  affected.forEach(mc => pivot.add(mc.mesh)); // auto-detaches from scene
+
+  const targetAngle = (inv ? 1 : -1) * Math.PI / 2 * (double ? 2 : 1);
+
+  anim = {
+    pivot, axis, targetAngle,
+    startTime: performance.now(),
+    duration,
+    onComplete() {
+      // Un-parent back to scene, preserving world transform
+      affected.forEach(mc => scene.attach(mc.mesh));
+      scene.remove(pivot);
+      // Update logical positions (mc.x/y/z still hold old values)
+      applyMovePure(face, inv, double);
+      // Snap mesh.position to integer grid and refresh material colours
+      affected.forEach(mc => refreshMesh(mc));
+      onComplete?.();
+    },
+  };
+}
+
+// Update only the logical positions (mc.x/y/z), no mesh changes
+function applyMovePure(face, inv, double = false) {
+  const axis  = faceAxis(face);
+  const layer = faceLayer(face);
+  const angle = inv ? Math.PI / 2 : -Math.PI / 2;
+  const times = double ? 2 : 1;
+  for (let t = 0; t < times; t++) {
+    const mat = new THREE.Matrix4();
+    if (axis === 'x') mat.makeRotationX(angle);
+    if (axis === 'y') mat.makeRotationY(angle);
+    if (axis === 'z') mat.makeRotationZ(angle);
+    meshCubies.filter(mc => mc[axis] === layer).forEach(mc => {
+      const p = new THREE.Vector3(mc.x, mc.y, mc.z).applyMatrix4(mat);
+      mc.x = Math.round(p.x);
+      mc.y = Math.round(p.y);
+      mc.z = Math.round(p.z);
+    });
+  }
+}
+
+function tickAnimation() {
+  if (!anim) return;
+  const t = Math.min((performance.now() - anim.startTime) / anim.duration, 1);
+  const angle = anim.targetAngle * easeInOut(t);
+
+  if (anim.axis === 'x') anim.pivot.rotation.x = angle;
+  if (anim.axis === 'y') anim.pivot.rotation.y = angle;
+  if (anim.axis === 'z') anim.pivot.rotation.z = angle;
+
+  if (t >= 1) {
+    const cb = anim.onComplete;
+    anim = null;
+    cb();
+  }
+}
+
+function setAnimating(on) {
+  isAnimating = on;
+  ['btn-scramble', 'btn-solve', 'btn-reset', 'btn-prev', 'btn-next'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = on;
+  });
+}
+
+// -- Three.js scene ------------------------------------------------------------
 
 let scene, camera, renderer, controls, raycaster, pointer;
 let meshCubies = [];   // { x, y, z, color, mesh }
@@ -82,23 +160,23 @@ let selectedIdx = null;
 let activeColor = 'white';
 let config, solvedMap; // solvedMap: posKey → color
 
-// Build Three.js mesh for one cubie
+// Build Three.js mesh for one cubie: single material (all faces same colour).
+// The physical pieces are solid-coloured plastic so this is correct for this puzzle,
+// and avoids exposing dark inner faces through inter-layer gaps during rotation.
 function makeMesh(c) {
-  const geo   = new THREE.BoxGeometry(1 - GAP, 1 - GAP, 1 - GAP);
-  const flags = outerFlags(c.x, c.y, c.z);
-  const hex   = COLOR_HEX[c.color] ?? INNER;
-  const mats  = flags.map(out => new THREE.MeshLambertMaterial({ color: out ? hex : INNER }));
-  const mesh  = new THREE.Mesh(geo, mats);
+  const geo  = new THREE.BoxGeometry(1 - GAP, 1 - GAP, 1 - GAP);
+  const hex  = COLOR_HEX[c.color] ?? INNER;
+  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: hex }));
   mesh.position.set(c.x, c.y, c.z);
   return mesh;
 }
 
-// Sync mesh visuals to cubie data (call after any position/color change)
+// Sync mesh visuals to cubie data (call after any position/colour change).
+// Rotation is reset so the mesh axes re-align with world axes after pivot animation.
 function refreshMesh(mc) {
-  const flags = outerFlags(mc.x, mc.y, mc.z);
-  const hex   = COLOR_HEX[mc.color] ?? INNER;
-  flags.forEach((out, i) => mc.mesh.material[i].color.setHex(out ? hex : INNER));
+  mc.mesh.material.color.setHex(COLOR_HEX[mc.color] ?? INNER);
   mc.mesh.position.set(mc.x, mc.y, mc.z);
+  mc.mesh.rotation.set(0, 0, 0);
 }
 
 function spawnMeshes(cubies) {
@@ -110,7 +188,7 @@ function spawnMeshes(cubies) {
   });
 }
 
-// ── Selection ─────────────────────────────────────────────────────────────────
+// -- Selection -----------------------------------------------------------------
 
 function selectCubie(idx) {
   clearSelection();
@@ -137,9 +215,10 @@ function paintSelected(color) {
   clearSelection();
 }
 
-// ── Pointer events ────────────────────────────────────────────────────────────
+// -- Pointer events ------------------------------------------------------------
 
 function onClick(e) {
+  if (isAnimating) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
   pointer.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
@@ -151,7 +230,7 @@ function onClick(e) {
   else selectCubie(idx);
 }
 
-// ── Move application to meshes ────────────────────────────────────────────────
+// -- Move application to meshes ------------------------------------------------
 
 function applyMoveToScene(face, inv, double = false) {
   const axis  = faceAxis(face);
@@ -184,7 +263,7 @@ function parseLabel(label) {
   return { face: label[0], inv: label.includes("'"), double: label.includes('2') };
 }
 
-// ── Scramble ──────────────────────────────────────────────────────────────────
+// -- Scramble ------------------------------------------------------------------
 
 let scrambleHistory = [];
 
@@ -200,11 +279,19 @@ function doScramble() {
     lastFace = face;
     const inv = Math.random() < 0.5;
     scrambleHistory.push({ face, inv, double: false });
-    applyMoveToScene(face, inv, false);
   }
+
+  setAnimating(true);
+  let i = 0;
+  function playNext() {
+    if (i >= scrambleHistory.length) { setAnimating(false); return; }
+    const { face, inv, double } = scrambleHistory[i++];
+    startMoveAnimation(face, inv, double, 180, playNext);
+  }
+  playNext();
 }
 
-// ── Solver (Web Worker) ───────────────────────────────────────────────────────
+// -- Solver (Web Worker) -------------------------------------------------------
 
 let solution     = [];
 let solutionStep = 0;
@@ -255,7 +342,7 @@ function setSolving(on) {
   btn.disabled    = on;
 }
 
-// ── Solution panel ────────────────────────────────────────────────────────────
+// -- Solution panel ------------------------------------------------------------
 
 function showSolution(moves) {
   const panel = document.getElementById('solution-panel');
@@ -282,24 +369,28 @@ function hideSolution() {
 }
 
 function stepSolution(dir) {
-  if (!preSnapshot) return;
+  if (!preSnapshot || isAnimating) return;
   const target = solutionStep + dir;
   if (target < 0 || target > solution.length) return;
 
   if (dir === 1) {
     const { face, inv, double } = parseLabel(solution[solutionStep]);
-    applyMoveToScene(face, inv, double);
-    solutionStep++;
+    setAnimating(true);
+    startMoveAnimation(face, inv, double, 280, () => {
+      solutionStep++;
+      updateCounter();
+      setAnimating(false);
+    });
   } else {
-    // Rewind: rebuild from snapshot, replay up to target step
+    // Rewind is instant — rebuild from snapshot, replay up to target
     spawnMeshes(preSnapshot);
     for (let i = 0; i < target; i++) {
       const { face, inv, double } = parseLabel(solution[i]);
       applyMoveToScene(face, inv, double);
     }
     solutionStep = target;
+    updateCounter();
   }
-  updateCounter();
 }
 
 function updateCounter() {
@@ -309,7 +400,7 @@ function updateCounter() {
   });
 }
 
-// ── UI wiring ─────────────────────────────────────────────────────────────────
+// -- UI wiring -----------------------------------------------------------------
 
 function setupUI() {
   document.querySelectorAll('.swatch').forEach(btn => {
@@ -322,13 +413,17 @@ function setupUI() {
   });
 
   document.getElementById('btn-reset').addEventListener('click', () => {
+    anim = null;
     if (activeWorker) { activeWorker.terminate(); activeWorker = null; setSolving(false); }
+    setAnimating(false);
     spawnMeshes(buildCubies(config));
     clearSelection();
     hideSolution();
   });
   document.getElementById('btn-scramble').addEventListener('click', () => {
+    anim = null;
     if (activeWorker) { activeWorker.terminate(); activeWorker = null; setSolving(false); }
+    setAnimating(false);
     doScramble();
   });
   document.getElementById('btn-solve').addEventListener('click', doSolve);
@@ -336,7 +431,7 @@ function setupUI() {
   document.getElementById('btn-next').addEventListener('click', () => stepSolution(1));
 }
 
-// ── Label ─────────────────────────────────────────────────────────────────────
+// -- Label ---------------------------------------------------------------------
 
 let labelEl;
 function ensureLabel() {
@@ -350,10 +445,11 @@ function ensureLabel() {
 function showLabel(t) { ensureLabel().textContent = t; ensureLabel().classList.add('visible'); }
 function hideLabel()  { ensureLabel().classList.remove('visible'); }
 
-// ── Render loop ───────────────────────────────────────────────────────────────
+// -- Render loop ---------------------------------------------------------------
 
 function animate() {
   requestAnimationFrame(animate);
+  tickAnimation();
   controls.update();
   renderer.render(scene, camera);
 }
@@ -365,7 +461,7 @@ function onResize() {
   renderer.setSize(vp.clientWidth, vp.clientHeight);
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// -- Entry point ---------------------------------------------------------------
 
 async function init() {
   config = await fetch('./configs/tetris.json').then(r => r.json());
